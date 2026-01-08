@@ -1,0 +1,70 @@
+WITH BeatPlan_CTE AS (SELECT
+		 bp.id AS Id,
+		 bp.agreement_no AS Agreement_NO,
+		 bp.scheduled_time AS Scheduled_Time,
+		 DATE(bp.scheduled_time) AS Visit_Date,
+		 um.name AS Sales_Person,
+		 lm.name AS City,
+		 c.campaign_name AS Visit_Type,
+		 bp.feedback_option AS Feedback_Option
+FROM  tbl_beat_plan bp
+LEFT JOIN tbl_user_master um ON bp.assigned_user  = um.user_id 
+LEFT JOIN tbl_locations_master lm ON um.location_id  = lm.id 
+LEFT JOIN tbl_campaign c ON bp.visit_type  = c.id) ,
+Collection_CTE AS (SELECT
+		 AgreementNo,
+		 DATE(TransactionDate) AS TxnDate,
+		 SUM(AmountPaid) AS AmountPaid
+FROM  Collection_Data_combined 
+GROUP BY AgreementNo,
+	  DATE(TransactionDate)) ,
+LoanMaster_CTE AS (SELECT DISTINCT
+		 lcc."Loan Number" AS Loan_Number,
+		 lcc."Customer Name" AS Customer_Name,
+		 lcc."Cust Mobile" AS Cust_Mobile
+FROM  LCC_Report_LTD lcc)
+SELECT
+		 bp.Id AS "BeatPlan ID",
+		 bl.Loan_Number AS "Loan Number",
+		 bl.Customer_Name AS "Customer Name",
+		 bl.Cust_Mobile AS "Customer Mobile",
+		 bp.Sales_Person AS "Collection_Sales_Person",
+		 bp.City AS "City",
+		 bp.Scheduled_Time AS "Scheduled Time",
+		 bp.Visit_Date AS "Visit Date",
+		 
+			/* keep Collection Date only once per Loan Number*/
+			CASE
+				 WHEN ROW_NUMBER() OVER(PARTITION BY bl.Loan_Number , cd.TxnDate  ORDER BY cd.TxnDate )  = 1 THEN cd.TxnDate
+				 ELSE NULL
+			 END AS "Collection Date",
+		 
+			/* keep Amount only once per Loan Number + Date*/
+			CASE
+				 WHEN ROW_NUMBER() OVER(PARTITION BY bl.Loan_Number , cd.TxnDate , cd.AmountPaid  ORDER BY cd.TxnDate )  = 1 THEN cd.AmountPaid
+				 ELSE NULL
+			 END AS "Collection Amount",
+		 bp.Visit_Type AS "Visit Type",
+		 bp.Feedback_Option AS "Feedback Option",
+		 
+			CASE
+				 WHEN cd.TxnDate  = bp.Visit_Date THEN 'Collected on Visit Date'
+				 WHEN cd.TxnDate  = DATE_ADD(bp.Visit_Date, INTERVAL (1) DAY) THEN 'Collected after 1 Day'
+				 WHEN cd.TxnDate  = DATE_ADD(bp.Visit_Date, INTERVAL (2) DAY) THEN 'Collected after 2 Days'
+				 ELSE 'Not Collected'
+			 END AS "Collection Status",
+		 
+			/* Visit Date Bucket */
+			CASE
+				 WHEN DAY(bp.Visit_Date)  BETWEEN 1  AND  6 THEN '1st–6th'
+				 WHEN DAY(bp.Visit_Date)  BETWEEN 7  AND  12 THEN '7th–12th'
+				 WHEN DAY(bp.Visit_Date)  BETWEEN 13  AND  18 THEN '13th–18th'
+				 WHEN DAY(bp.Visit_Date)  BETWEEN 19  AND  24 THEN '19th–24th'
+				 ELSE '25th–30th'
+			 END AS "Visit Date Bucket",
+		 DENSE_RANK() OVER(PARTITION BY bl.Loan_Number , cd.TxnDate  ORDER BY bp.Scheduled_Time DESC ) AS drnk
+FROM  BeatPlan_CTE bp
+LEFT JOIN Collection_CTE cd ON bp.Agreement_NO  = cd.AgreementNo
+	 AND	cd.TxnDate  BETWEEN bp.Visit_Date  AND  DATE_ADD(bp.Visit_Date, INTERVAL (2) DAY) 
+LEFT JOIN LoanMaster_CTE bl ON bp.Agreement_NO  = bl.Loan_Number  
+ 
